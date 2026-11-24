@@ -161,6 +161,8 @@ def analyze(directory):
         end = 20 + plateau_seconds
         intervals = [("plateau", 20, end), ("first minute", 20, 80),
                      ("last minute", end - 60, end)]
+        intervals += [(f"minute {minute + 1:02d}", start_s, min(end, start_s + 60))
+                      for minute, start_s in enumerate(range(20, end, 60))]
     result = {"run_id": info["run_id"], "scenario": mode, "jmeter_start_ms": start,
               "first_jtl_ms": min(s["start"] for s in samples),
               "last_jtl_completion_ms": max(map(end_ms, samples)),
