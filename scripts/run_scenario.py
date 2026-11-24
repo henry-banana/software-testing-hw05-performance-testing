@@ -80,6 +80,13 @@ def require_isolated_checkout(path):
     raise ValueError(f"--sut must point to a disposable EShop clone at {PIN} with unchanged backend code")
 
 
+def require_free_port(port):
+    with socket.socket() as probe:
+        probe.settimeout(0.5)
+        if probe.connect_ex((LOCAL_HOST, port)) == 0:
+            raise RuntimeError(f"Port {port} already in use. Stop only the intended test backend first.")
+
+
 def stop(process):
     if process is not None and process.poll() is None:
         process.terminate()
@@ -133,10 +140,7 @@ def run(args):
     if not jar.is_file():
         raise ValueError("--jmeter must point to the Apache JMeter installation folder")
     pin = require_isolated_checkout(sut)
-    with socket.socket() as probe:
-        probe.settimeout(0.5)
-        if probe.connect_ex((LOCAL_HOST, 3000)) == 0:
-            raise RuntimeError("Port 3000 already in use. Stop only the intended test backend first.")
+    require_free_port(3000)
     java = str(args.java.resolve()) if args.java else shutil.which("java")
     node = shutil.which("node")
     if not java or not node:
@@ -164,7 +168,7 @@ def run(args):
         "-Jjmeter.save.saveservice.timestamp_format=ms",
         "-Jhttpclient4.retrycount=0",
     ]
-    if args.mode != "measure" and args.mode == "smoke":
+    if args.mode == "smoke":
         conf += ["-Jthink_min=50", "-Jthink_range=10"]
     command = [java, "-Xms128m", "-Xmx768m", "-Xss512k", "-jar", str(jar),
                "-n", "-t", str(plan), "-l", str(jtl), "-j", str(out / "jmeter.log"),

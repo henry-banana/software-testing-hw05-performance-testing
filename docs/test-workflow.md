@@ -1,52 +1,58 @@
 # Setup và quy trình chạy HW05
 
-## Môi trường đề xuất
+## Môi trường
 
-Trên máy hiện tại, PowerShell thấy Node.js 24.16.0 và Java Temurin 25.0.2 qua PATH. Cần cài hoặc trỏ đến Apache JMeter, sau đó xác minh phiên bản Java và JMeter hoạt động cùng nhau. Task Manager dùng để chụp tiến trình Node của backend và dxdiag dùng để thu thông số máy.
+Lượt đo dùng Windows 11, Node.js 24.16.0, Apache JMeter 5.6.3 và Eclipse Temurin 21.0.10. Link tải và kiểm SHA512 nằm tại trang phát hành Apache. Smoke ban đầu cho thấy JMeter có thể in version với Java 25, nhưng Groovy của plan lỗi class-file version 69 khi chạy. Chọn Java 21 trong runner. Script dùng `psutil` để ghi CPU và working set theo PID. [Apache JMeter 5.6.3](https://jmeter.apache.org/download_jmeter.cgi)
 
-Đề chỉ định SUT gốc `ttbhanh/eshop-sut`. Đề xuất lấy bản fork của nhóm làm baseline thử và ghi quan hệ với upstream trong báo cáo. Tại thời điểm chuẩn bị, mã hai file `backend/server.js` và `backend/database.js` của fork trùng với bản local HW04. Xem [ghi chú nguồn](references.md).
+Đề chỉ định SUT gốc `ttbhanh/eshop-sut`. Lượt đo dùng fork nhóm tại `de0f48f5b40939692e7029943295d44788f617ea`. Hai file backend dùng để đo trùng blob với bản local HW04 tại commit upstream đã dẫn trong ghi chú nguồn. [Ghi chú nguồn](references.md)
 
-Từ thư mục `hw05`, tạo bản SUT riêng khi bắt đầu Task 1.
+Chuẩn bị một bản clone riêng bên ngoài repo bài làm. Backend seed lại SQLite mỗi lần khởi động, vì vậy phải dùng dữ liệu thử có thể bỏ.
 
 ```powershell
-git clone https://github.com/tkob-team/eshop-sut.git eshop-sut
-Set-Location eshop-sut/backend
-git rev-parse HEAD
+$lab = Join-Path $env:TEMP 'csc13003-hw05-23120262'
+New-Item -ItemType Directory -Path $lab -Force | Out-Null
+$sut = Join-Path $lab 'eshop-sut'
+git clone https://github.com/tkob-team/eshop-sut.git $sut
+git -C $sut switch --detach de0f48f5b40939692e7029943295d44788f617ea
+Push-Location (Join-Path $sut 'backend')
 npm.cmd ci
-node server.js
+node -e "require('sqlite3')"
+Pop-Location
 ```
 
-Thử API đọc trong một terminal khác. Chỉ đo trên bản thử cục bộ đang kiểm soát.
+Nếu npm 12 báo đã chặn script cài native SQLite và kiểm tra bằng Node thất bại, chạy `npm.cmd install-scripts approve sqlite3` và `npm.cmd rebuild sqlite3` trong backend của bản thử, sau đó nhập lại mô-đun để xác nhận.
+
+## Workflow đã dùng để đo
+
+Mục tiêu là đặt hàng và xác nhận đơn mới xuất hiện trong lịch sử. Luồng tìm sản phẩm rồi checkout đã xuất hiện trong README của thành viên Phúc Hoàng. Xác nhận phạm vi với cả nhóm và lưu phản hồi cross-review trước khi nộp. [Workflow của Phúc Hoàng](https://github.com/nphoang-itus/hw05-performance-testing/blob/main/README.md#workflow-under-test-endpoint-option-a)
+
+| Nhóm | API | Điều kiện đúng |
+| --- | --- | --- |
+| Auth-heavy | `POST /api/login` | Token hợp lệ và tài khoản trả về khớp CSV |
+| Read-heavy | `GET /api/products`, `GET /api/products/:id` | Danh sách có sản phẩm fixture, detail khớp ID và giá |
+| Transactional | `POST /api/cart`, `POST /api/checkout` | Có xác nhận thêm giỏ và nhận được `orderId` dương |
+| Kiểm tra sau giao dịch | `GET /api/orders/my-orders` | Đơn mới nhất của chính tài khoản này khớp ID, giá và trạng thái pending |
+
+Mỗi VU dùng một tài khoản tổng hợp cố định. Đăng ký tài khoản trước lượt đo. Khởi động lại backend giữa các lượt để reset SQLite, khóa tài khoản và giỏ trong bộ nhớ. Ghi các kiểm tra sai mật khẩu riêng khỏi kết quả đo. Mã cộng 2 vào bộ đếm sai mật khẩu, ảnh hưởng đến điều kiện khóa. [Mã login](https://github.com/tkob-team/eshop-sut/blob/de0f48f5b40939692e7029943295d44788f617ea/backend/server.js#L32-L65)
+
+## Chạy từ repo bài làm
+
+Sau khi giải nén JMeter đã xác minh, chỉnh hai biến đường dẫn công cụ theo máy. Cổng 3000 cần dành cho SUT thử. Runner mở tiến trình riêng, chỉ gửi request tới loopback, dừng đúng PID mình đã tạo và dùng thư mục kết quả mới cho từng lượt.
 
 ```powershell
-Invoke-RestMethod 'http://127.0.0.1:3000/api/products'
-java -version
-jmeter.bat --version
+$java = 'C:/Program Files/Eclipse Adoptium/jdk-21.0.10.7-hotspot/bin/java.exe'
+$jmeter = Join-Path $lab 'tools/apache-jmeter-5.6.3'
+python -m pip install -r scripts/requirements.txt
+python -B scripts/build_plans.py
+python -B scripts/run_scenario.py --sut $sut --java $java --jmeter $jmeter --mode smoke --run-id demo-smoke
+python -B scripts/run_scenario.py --sut $sut --java $java --jmeter $jmeter --scenario Load --run-id demo-load
+python -B scripts/run_scenario.py --sut $sut --java $java --jmeter $jmeter --scenario Stress --run-id demo-stress
+python -B scripts/run_scenario.py --sut $sut --java $java --jmeter $jmeter --scenario Spike --run-id demo-spike
+python -B scripts/analyze_jtl.py results/load/demo-load results/stress/demo-stress results/spike/demo-spike
 ```
 
-Nếu JMeter chưa nằm trên PATH, chạy `jmeter.bat` bằng đường dẫn tới thư mục `bin` của bản JMeter đã cài. Nếu cổng 3000 đã được dùng, xác định tiến trình và chạy trên môi trường thử riêng trước khi gửi tải. Đối chiếu startup thực tế và fixture của commit đã chốt.
+Chọn VU cho endurance từ các bậc Stress đã đo. Ví dụ lệnh 96 VU, 720 giây plateau là `python -B scripts/run_scenario.py --sut $sut --java $java --jmeter $jmeter --mode endurance --vus 96 --seconds 720 --run-id demo-endurance`.
 
-## Workflow đang đề xuất
+Bằng chứng nguồn nằm trong `results/<scenario>/<run-id>/`. Mở `console.log` để xem tiến độ và `resources.csv` để đối chiếu PID. Sau khi có log, mở JMX bằng đúng Java 21, bật listener khi xem file JTL đã thu và dùng mẫu nhỏ với View Results Tree. Ảnh live lấy trong lúc runner đang chạy.
 
-Phương án để đối chiếu với nhóm là đặt hàng và xác nhận đơn mới xuất hiện trong lịch sử. Luồng tìm sản phẩm rồi checkout đã được Phúc Hoàng ghi trong README của bạn ấy. [Workflow của Phúc Hoàng](https://github.com/nphoang-itus/hw05-performance-testing/blob/main/README.md#workflow-under-test-endpoint-option-a)
-
-| Nhóm | API ứng viên | Điều kiện đúng cần kiểm |
-| --- | --- | --- |
-| Auth-heavy | `POST /api/login` | Tài khoản thử đăng nhập thành công và trích được token |
-| Read-heavy | `GET /api/products`, `GET /api/products/:id` | Danh sách có sản phẩm fixture và chi tiết khớp ID |
-| Transactional | `POST /api/cart`, `POST /api/checkout` | Dùng token của chính VU, kiểm nội dung phản hồi và `orderId` |
-| Kiểm tra sau giao dịch | `GET /api/orders/my-orders` | Lịch sử của tài khoản thử có đúng `orderId` vừa tạo |
-
-Xác nhận workflow với nhóm trước khi sinh JMX. Điền dữ liệu theo fixture thực tế. Kiểm số lượng tài khoản cho số VU đồng thời, tách request mồi khỏi kết quả đo, và đặt lại trạng thái ban đầu khi thay mức tải. Checkout ghi đơn trong SQLite và mã backend hiện tại giữ giỏ theo user trong bộ nhớ. Cần xác nhận giỏ và số đơn giữa lượt chạy để giữ điều kiện đo so sánh được.
-
-Đề mô tả khóa sau ba lần đăng nhập sai. Đọc mã cho thấy nhánh sai mật khẩu cộng 2 vào bộ đếm mỗi lần. Kiểm hành vi thực tế trên fixture riêng và lưu bằng chứng trước khi kết luận. Dùng tài khoản hợp lệ trong workload chính và ghi cách reset nếu khóa phát sinh giữa các lượt. [Mã API login](https://github.com/tkob-team/eshop-sut/blob/de0f48f5b40939692e7029943295d44788f617ea/backend/server.js#L32-L65)
-
-## Thiết kế phép đo
-
-1. Smoke xác nhận từng bước với 1 VU và fixture tổng hợp.
-2. Chọn Load với ramp và plateau, Stress với các bậc tăng, Spike với tải nền, đỉnh và phục hồi. Dùng chung mẫu request. Ghi VU, ramp, thời lượng, think-time, timeout và lý do.
-3. Chốt tiêu chí ổn định trước khi đo. Xét p95, tỷ lệ lỗi, throughput và tài nguyên của backend lẫn máy phát tải.
-4. Chạy chính thức bằng CLI, lưu JTL và sinh dashboard theo hướng dẫn trong [test-plans](../test-plans/README.md).
-5. Chọn mức sát ngưỡng đã quan sát để chạy endurance khoảng 10 đến 15 phút. Giữ riêng log, dashboard và ảnh. Diễn giải kết quả theo máy, commit, fixture và workflow đã đo.
-
-[Hướng dẫn setup EShop](https://github.com/tkob-team/eshop-sut/blob/main/setup_guide.md), [JMeter CLI](https://jmeter.apache.org/usermanual/get-started.html#non_gui), [JMeter Dashboard](https://jmeter.apache.org/usermanual/generating-dashboard.html)
+[Điều kiện đo](measurement-protocol.md), [JMeter CLI](https://jmeter.apache.org/usermanual/get-started.html#non_gui), [JMeter Dashboard](https://jmeter.apache.org/usermanual/generating-dashboard.html)
