@@ -1,0 +1,1099 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<jmeterTestPlan version="1.2" properties="5.0" jmeter="5.6.3">
+  <hashTree>
+    <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="23120262_Spike_20261124" enabled="true">
+      <stringProp name="TestPlan.comments">One EShop order workflow. HTTP load is restricted to 127.0.0.1.</stringProp>
+      <boolProp name="TestPlan.serialize_threadgroups">false</boolProp>
+    </TestPlan>
+    <hashTree>
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="spike-01-add016" enabled="true">
+        <stringProp name="ThreadGroup.on_sample_error">startnextloop</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController">
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+          <stringProp name="LoopController.loops">-1</stringProp>
+        </elementProp>
+        <boolProp name="ThreadGroup.scheduler">true</boolProp>
+        <stringProp name="ThreadGroup.num_threads">${__P(num_threads_1,16)}</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">${__P(ramp_time_1,8)}</stringProp>
+        <stringProp name="ThreadGroup.delay">${__P(delay_1,0)}</stringProp>
+        <stringProp name="ThreadGroup.duration">${__P(duration_1,100)}</stringProp>
+      </ThreadGroup>
+      <hashTree>
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="01 Login" enabled="true">
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments">
+              <elementProp name="" elementType="HTTPArgument">
+                <boolProp name="HTTPArgument.always_encode">false</boolProp>
+                <stringProp name="Argument.value">{"email":"${email}","password":"${password}"}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+            </collectionProp>
+          </elementProp>
+          <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+          <stringProp name="HTTPSampler.domain">127.0.0.1</stringProp>
+          <stringProp name="HTTPSampler.port">${__P(port,3000)}</stringProp>
+          <stringProp name="HTTPSampler.protocol">http</stringProp>
+          <stringProp name="HTTPSampler.path">/api/login</stringProp>
+          <stringProp name="HTTPSampler.method">POST</stringProp>
+          <stringProp name="HTTPSampler.implementation">HttpClient4</stringProp>
+          <stringProp name="HTTPSampler.connect_timeout">2000</stringProp>
+          <stringProp name="HTTPSampler.response_timeout">5000</stringProp>
+          <boolProp name="HTTPSampler.follow_redirects">false</boolProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="Request headers" enabled="true">
+            <collectionProp name="HeaderManager.headers">
+              <elementProp name="" elementType="Header">
+                <stringProp name="Header.name">Content-Type</stringProp>
+                <stringProp name="Header.value">application/json</stringProp>
+              </elementProp>
+            </collectionProp>
+          </HeaderManager>
+          <hashTree />
+          <JSR223PreProcessor guiclass="TestBeanGUI" testclass="JSR223PreProcessor" testname="Bind CSV row to VU" enabled="true">
+            <stringProp name="scriptLanguage">groovy</stringProp>
+            <stringProp name="parameters">0</stringProp>
+            <stringProp name="filename" />
+            <stringProp name="cacheKey">true</stringProp>
+            <stringProp name="script">if (vars.get('email') == null) {
+    def path = props.getProperty('fixture')
+    def file = path ? new File(path) : new File(
+        org.apache.jmeter.services.FileServer.getFileServer().getBaseDir(),
+        '../data/workflow.csv')
+    int slot = Integer.parseInt(Parameters) + ctx.getThreadNum()
+    def rows = file.readLines('UTF-8')
+    def names = rows[0].split(',', -1)
+    def values = rows[slot + 1].split(',', -1)
+    names.eachWithIndex { name, i -&gt; vars.put(name, values[i]) }
+}
+vars.remove('token')
+vars.remove('orderId')
+</stringProp>
+          </JSR223PreProcessor>
+          <hashTree />
+          <UniformRandomTimer guiclass="UniformRandomTimerGui" testclass="UniformRandomTimer" testname="Pace workflow" enabled="true">
+            <stringProp name="ConstantTimer.delay">${__P(think_min,850)}</stringProp>
+            <stringProp name="RandomTimer.range">${__P(think_range,300)}</stringProp>
+          </UniformRandomTimer>
+          <hashTree />
+          <JSR223Assertion guiclass="TestBeanGUI" testclass="JSR223Assertion" testname="Validate login" enabled="true">
+            <stringProp name="scriptLanguage">groovy</stringProp>
+            <stringProp name="parameters">login</stringProp>
+            <stringProp name="filename" />
+            <stringProp name="cacheKey">true</stringProp>
+            <stringProp name="script">if (!prev.isSuccessful()) return
+def fail = { reason -&gt;
+    AssertionResult.setFailure(true)
+    AssertionResult.setFailureMessage(reason)
+}
+try {
+    if (prev.getResponseCode() != '200') {
+        fail('Expected HTTP 200')
+        return
+    }
+    def body = new groovy.json.JsonSlurper().parseText(prev.getResponseDataAsString())
+    int productId = vars.get('product_id').toInteger()
+    switch (Parameters) {
+        case 'login':
+            if (!(body.token instanceof String) || !body.token || body.user?.email != vars.get('email')) {
+                fail('Expected token and matching account')
+                return
+            }
+            vars.put('token', body.token)
+            break
+        case 'list':
+            if (!(body instanceof List) || !body.any { it.id == productId }) fail('Fixture product absent')
+            break
+        case 'detail':
+            if (body.id != productId || body.price?.toString() != vars.get('total_amount')) fail('Wrong product or price')
+            break
+        case 'cart':
+            if (body.message != 'Added to cart') fail('Cart confirmation absent')
+            break
+        case 'checkout':
+            if (!(body.orderId instanceof Number) || body.orderId &lt;= 0) {
+                fail('Valid orderId missing')
+                return
+            }
+            vars.put('orderId', body.orderId.toString())
+            break
+        case 'history':
+            def order = (body instanceof List &amp;&amp; body) ? body[0] : null
+            if (order?.id?.toString() != vars.get('orderId')
+                || order.status != 'pending'
+                || order.total_amount?.toString() != vars.get('total_amount')) {
+                fail('New pending order absent or mismatched in history')
+            }
+            break
+    }
+} catch (Exception ignored) {
+    fail('Unexpected JSON response')
+}
+</stringProp>
+          </JSR223Assertion>
+          <hashTree />
+        </hashTree>
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="02 Product list" enabled="true">
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments" />
+          </elementProp>
+          <stringProp name="HTTPSampler.domain">127.0.0.1</stringProp>
+          <stringProp name="HTTPSampler.port">${__P(port,3000)}</stringProp>
+          <stringProp name="HTTPSampler.protocol">http</stringProp>
+          <stringProp name="HTTPSampler.path">/api/products</stringProp>
+          <stringProp name="HTTPSampler.method">GET</stringProp>
+          <stringProp name="HTTPSampler.implementation">HttpClient4</stringProp>
+          <stringProp name="HTTPSampler.connect_timeout">2000</stringProp>
+          <stringProp name="HTTPSampler.response_timeout">5000</stringProp>
+          <boolProp name="HTTPSampler.follow_redirects">false</boolProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <JSR223Assertion guiclass="TestBeanGUI" testclass="JSR223Assertion" testname="Validate list" enabled="true">
+            <stringProp name="scriptLanguage">groovy</stringProp>
+            <stringProp name="parameters">list</stringProp>
+            <stringProp name="filename" />
+            <stringProp name="cacheKey">true</stringProp>
+            <stringProp name="script">if (!prev.isSuccessful()) return
+def fail = { reason -&gt;
+    AssertionResult.setFailure(true)
+    AssertionResult.setFailureMessage(reason)
+}
+try {
+    if (prev.getResponseCode() != '200') {
+        fail('Expected HTTP 200')
+        return
+    }
+    def body = new groovy.json.JsonSlurper().parseText(prev.getResponseDataAsString())
+    int productId = vars.get('product_id').toInteger()
+    switch (Parameters) {
+        case 'login':
+            if (!(body.token instanceof String) || !body.token || body.user?.email != vars.get('email')) {
+                fail('Expected token and matching account')
+                return
+            }
+            vars.put('token', body.token)
+            break
+        case 'list':
+            if (!(body instanceof List) || !body.any { it.id == productId }) fail('Fixture product absent')
+            break
+        case 'detail':
+            if (body.id != productId || body.price?.toString() != vars.get('total_amount')) fail('Wrong product or price')
+            break
+        case 'cart':
+            if (body.message != 'Added to cart') fail('Cart confirmation absent')
+            break
+        case 'checkout':
+            if (!(body.orderId instanceof Number) || body.orderId &lt;= 0) {
+                fail('Valid orderId missing')
+                return
+            }
+            vars.put('orderId', body.orderId.toString())
+            break
+        case 'history':
+            def order = (body instanceof List &amp;&amp; body) ? body[0] : null
+            if (order?.id?.toString() != vars.get('orderId')
+                || order.status != 'pending'
+                || order.total_amount?.toString() != vars.get('total_amount')) {
+                fail('New pending order absent or mismatched in history')
+            }
+            break
+    }
+} catch (Exception ignored) {
+    fail('Unexpected JSON response')
+}
+</stringProp>
+          </JSR223Assertion>
+          <hashTree />
+        </hashTree>
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="03 Product detail" enabled="true">
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments" />
+          </elementProp>
+          <stringProp name="HTTPSampler.domain">127.0.0.1</stringProp>
+          <stringProp name="HTTPSampler.port">${__P(port,3000)}</stringProp>
+          <stringProp name="HTTPSampler.protocol">http</stringProp>
+          <stringProp name="HTTPSampler.path">/api/products/${product_id}</stringProp>
+          <stringProp name="HTTPSampler.method">GET</stringProp>
+          <stringProp name="HTTPSampler.implementation">HttpClient4</stringProp>
+          <stringProp name="HTTPSampler.connect_timeout">2000</stringProp>
+          <stringProp name="HTTPSampler.response_timeout">5000</stringProp>
+          <boolProp name="HTTPSampler.follow_redirects">false</boolProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <JSR223Assertion guiclass="TestBeanGUI" testclass="JSR223Assertion" testname="Validate detail" enabled="true">
+            <stringProp name="scriptLanguage">groovy</stringProp>
+            <stringProp name="parameters">detail</stringProp>
+            <stringProp name="filename" />
+            <stringProp name="cacheKey">true</stringProp>
+            <stringProp name="script">if (!prev.isSuccessful()) return
+def fail = { reason -&gt;
+    AssertionResult.setFailure(true)
+    AssertionResult.setFailureMessage(reason)
+}
+try {
+    if (prev.getResponseCode() != '200') {
+        fail('Expected HTTP 200')
+        return
+    }
+    def body = new groovy.json.JsonSlurper().parseText(prev.getResponseDataAsString())
+    int productId = vars.get('product_id').toInteger()
+    switch (Parameters) {
+        case 'login':
+            if (!(body.token instanceof String) || !body.token || body.user?.email != vars.get('email')) {
+                fail('Expected token and matching account')
+                return
+            }
+            vars.put('token', body.token)
+            break
+        case 'list':
+            if (!(body instanceof List) || !body.any { it.id == productId }) fail('Fixture product absent')
+            break
+        case 'detail':
+            if (body.id != productId || body.price?.toString() != vars.get('total_amount')) fail('Wrong product or price')
+            break
+        case 'cart':
+            if (body.message != 'Added to cart') fail('Cart confirmation absent')
+            break
+        case 'checkout':
+            if (!(body.orderId instanceof Number) || body.orderId &lt;= 0) {
+                fail('Valid orderId missing')
+                return
+            }
+            vars.put('orderId', body.orderId.toString())
+            break
+        case 'history':
+            def order = (body instanceof List &amp;&amp; body) ? body[0] : null
+            if (order?.id?.toString() != vars.get('orderId')
+                || order.status != 'pending'
+                || order.total_amount?.toString() != vars.get('total_amount')) {
+                fail('New pending order absent or mismatched in history')
+            }
+            break
+    }
+} catch (Exception ignored) {
+    fail('Unexpected JSON response')
+}
+</stringProp>
+          </JSR223Assertion>
+          <hashTree />
+        </hashTree>
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="04 Add to cart" enabled="true">
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments">
+              <elementProp name="" elementType="HTTPArgument">
+                <boolProp name="HTTPArgument.always_encode">false</boolProp>
+                <stringProp name="Argument.value">{"id":${product_id},"quantity":1,"price":${total_amount}}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+            </collectionProp>
+          </elementProp>
+          <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+          <stringProp name="HTTPSampler.domain">127.0.0.1</stringProp>
+          <stringProp name="HTTPSampler.port">${__P(port,3000)}</stringProp>
+          <stringProp name="HTTPSampler.protocol">http</stringProp>
+          <stringProp name="HTTPSampler.path">/api/cart</stringProp>
+          <stringProp name="HTTPSampler.method">POST</stringProp>
+          <stringProp name="HTTPSampler.implementation">HttpClient4</stringProp>
+          <stringProp name="HTTPSampler.connect_timeout">2000</stringProp>
+          <stringProp name="HTTPSampler.response_timeout">5000</stringProp>
+          <boolProp name="HTTPSampler.follow_redirects">false</boolProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="Request headers" enabled="true">
+            <collectionProp name="HeaderManager.headers">
+              <elementProp name="" elementType="Header">
+                <stringProp name="Header.name">Content-Type</stringProp>
+                <stringProp name="Header.value">application/json</stringProp>
+              </elementProp>
+              <elementProp name="" elementType="Header">
+                <stringProp name="Header.name">Authorization</stringProp>
+                <stringProp name="Header.value">Bearer ${token}</stringProp>
+              </elementProp>
+            </collectionProp>
+          </HeaderManager>
+          <hashTree />
+          <JSR223Assertion guiclass="TestBeanGUI" testclass="JSR223Assertion" testname="Validate cart" enabled="true">
+            <stringProp name="scriptLanguage">groovy</stringProp>
+            <stringProp name="parameters">cart</stringProp>
+            <stringProp name="filename" />
+            <stringProp name="cacheKey">true</stringProp>
+            <stringProp name="script">if (!prev.isSuccessful()) return
+def fail = { reason -&gt;
+    AssertionResult.setFailure(true)
+    AssertionResult.setFailureMessage(reason)
+}
+try {
+    if (prev.getResponseCode() != '200') {
+        fail('Expected HTTP 200')
+        return
+    }
+    def body = new groovy.json.JsonSlurper().parseText(prev.getResponseDataAsString())
+    int productId = vars.get('product_id').toInteger()
+    switch (Parameters) {
+        case 'login':
+            if (!(body.token instanceof String) || !body.token || body.user?.email != vars.get('email')) {
+                fail('Expected token and matching account')
+                return
+            }
+            vars.put('token', body.token)
+            break
+        case 'list':
+            if (!(body instanceof List) || !body.any { it.id == productId }) fail('Fixture product absent')
+            break
+        case 'detail':
+            if (body.id != productId || body.price?.toString() != vars.get('total_amount')) fail('Wrong product or price')
+            break
+        case 'cart':
+            if (body.message != 'Added to cart') fail('Cart confirmation absent')
+            break
+        case 'checkout':
+            if (!(body.orderId instanceof Number) || body.orderId &lt;= 0) {
+                fail('Valid orderId missing')
+                return
+            }
+            vars.put('orderId', body.orderId.toString())
+            break
+        case 'history':
+            def order = (body instanceof List &amp;&amp; body) ? body[0] : null
+            if (order?.id?.toString() != vars.get('orderId')
+                || order.status != 'pending'
+                || order.total_amount?.toString() != vars.get('total_amount')) {
+                fail('New pending order absent or mismatched in history')
+            }
+            break
+    }
+} catch (Exception ignored) {
+    fail('Unexpected JSON response')
+}
+</stringProp>
+          </JSR223Assertion>
+          <hashTree />
+        </hashTree>
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="05 Checkout" enabled="true">
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments">
+              <elementProp name="" elementType="HTTPArgument">
+                <boolProp name="HTTPArgument.always_encode">false</boolProp>
+                <stringProp name="Argument.value">{"total_amount":${total_amount},"shipping_address":"${shipping_address}"}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+            </collectionProp>
+          </elementProp>
+          <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+          <stringProp name="HTTPSampler.domain">127.0.0.1</stringProp>
+          <stringProp name="HTTPSampler.port">${__P(port,3000)}</stringProp>
+          <stringProp name="HTTPSampler.protocol">http</stringProp>
+          <stringProp name="HTTPSampler.path">/api/checkout</stringProp>
+          <stringProp name="HTTPSampler.method">POST</stringProp>
+          <stringProp name="HTTPSampler.implementation">HttpClient4</stringProp>
+          <stringProp name="HTTPSampler.connect_timeout">2000</stringProp>
+          <stringProp name="HTTPSampler.response_timeout">5000</stringProp>
+          <boolProp name="HTTPSampler.follow_redirects">false</boolProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="Request headers" enabled="true">
+            <collectionProp name="HeaderManager.headers">
+              <elementProp name="" elementType="Header">
+                <stringProp name="Header.name">Content-Type</stringProp>
+                <stringProp name="Header.value">application/json</stringProp>
+              </elementProp>
+              <elementProp name="" elementType="Header">
+                <stringProp name="Header.name">Authorization</stringProp>
+                <stringProp name="Header.value">Bearer ${token}</stringProp>
+              </elementProp>
+            </collectionProp>
+          </HeaderManager>
+          <hashTree />
+          <JSR223Assertion guiclass="TestBeanGUI" testclass="JSR223Assertion" testname="Validate checkout" enabled="true">
+            <stringProp name="scriptLanguage">groovy</stringProp>
+            <stringProp name="parameters">checkout</stringProp>
+            <stringProp name="filename" />
+            <stringProp name="cacheKey">true</stringProp>
+            <stringProp name="script">if (!prev.isSuccessful()) return
+def fail = { reason -&gt;
+    AssertionResult.setFailure(true)
+    AssertionResult.setFailureMessage(reason)
+}
+try {
+    if (prev.getResponseCode() != '200') {
+        fail('Expected HTTP 200')
+        return
+    }
+    def body = new groovy.json.JsonSlurper().parseText(prev.getResponseDataAsString())
+    int productId = vars.get('product_id').toInteger()
+    switch (Parameters) {
+        case 'login':
+            if (!(body.token instanceof String) || !body.token || body.user?.email != vars.get('email')) {
+                fail('Expected token and matching account')
+                return
+            }
+            vars.put('token', body.token)
+            break
+        case 'list':
+            if (!(body instanceof List) || !body.any { it.id == productId }) fail('Fixture product absent')
+            break
+        case 'detail':
+            if (body.id != productId || body.price?.toString() != vars.get('total_amount')) fail('Wrong product or price')
+            break
+        case 'cart':
+            if (body.message != 'Added to cart') fail('Cart confirmation absent')
+            break
+        case 'checkout':
+            if (!(body.orderId instanceof Number) || body.orderId &lt;= 0) {
+                fail('Valid orderId missing')
+                return
+            }
+            vars.put('orderId', body.orderId.toString())
+            break
+        case 'history':
+            def order = (body instanceof List &amp;&amp; body) ? body[0] : null
+            if (order?.id?.toString() != vars.get('orderId')
+                || order.status != 'pending'
+                || order.total_amount?.toString() != vars.get('total_amount')) {
+                fail('New pending order absent or mismatched in history')
+            }
+            break
+    }
+} catch (Exception ignored) {
+    fail('Unexpected JSON response')
+}
+</stringProp>
+          </JSR223Assertion>
+          <hashTree />
+        </hashTree>
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="06 Order history" enabled="true">
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments" />
+          </elementProp>
+          <stringProp name="HTTPSampler.domain">127.0.0.1</stringProp>
+          <stringProp name="HTTPSampler.port">${__P(port,3000)}</stringProp>
+          <stringProp name="HTTPSampler.protocol">http</stringProp>
+          <stringProp name="HTTPSampler.path">/api/orders/my-orders</stringProp>
+          <stringProp name="HTTPSampler.method">GET</stringProp>
+          <stringProp name="HTTPSampler.implementation">HttpClient4</stringProp>
+          <stringProp name="HTTPSampler.connect_timeout">2000</stringProp>
+          <stringProp name="HTTPSampler.response_timeout">5000</stringProp>
+          <boolProp name="HTTPSampler.follow_redirects">false</boolProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="Request headers" enabled="true">
+            <collectionProp name="HeaderManager.headers">
+              <elementProp name="" elementType="Header">
+                <stringProp name="Header.name">Authorization</stringProp>
+                <stringProp name="Header.value">Bearer ${token}</stringProp>
+              </elementProp>
+            </collectionProp>
+          </HeaderManager>
+          <hashTree />
+          <JSR223Assertion guiclass="TestBeanGUI" testclass="JSR223Assertion" testname="Validate history" enabled="true">
+            <stringProp name="scriptLanguage">groovy</stringProp>
+            <stringProp name="parameters">history</stringProp>
+            <stringProp name="filename" />
+            <stringProp name="cacheKey">true</stringProp>
+            <stringProp name="script">if (!prev.isSuccessful()) return
+def fail = { reason -&gt;
+    AssertionResult.setFailure(true)
+    AssertionResult.setFailureMessage(reason)
+}
+try {
+    if (prev.getResponseCode() != '200') {
+        fail('Expected HTTP 200')
+        return
+    }
+    def body = new groovy.json.JsonSlurper().parseText(prev.getResponseDataAsString())
+    int productId = vars.get('product_id').toInteger()
+    switch (Parameters) {
+        case 'login':
+            if (!(body.token instanceof String) || !body.token || body.user?.email != vars.get('email')) {
+                fail('Expected token and matching account')
+                return
+            }
+            vars.put('token', body.token)
+            break
+        case 'list':
+            if (!(body instanceof List) || !body.any { it.id == productId }) fail('Fixture product absent')
+            break
+        case 'detail':
+            if (body.id != productId || body.price?.toString() != vars.get('total_amount')) fail('Wrong product or price')
+            break
+        case 'cart':
+            if (body.message != 'Added to cart') fail('Cart confirmation absent')
+            break
+        case 'checkout':
+            if (!(body.orderId instanceof Number) || body.orderId &lt;= 0) {
+                fail('Valid orderId missing')
+                return
+            }
+            vars.put('orderId', body.orderId.toString())
+            break
+        case 'history':
+            def order = (body instanceof List &amp;&amp; body) ? body[0] : null
+            if (order?.id?.toString() != vars.get('orderId')
+                || order.status != 'pending'
+                || order.total_amount?.toString() != vars.get('total_amount')) {
+                fail('New pending order absent or mismatched in history')
+            }
+            break
+    }
+} catch (Exception ignored) {
+    fail('Unexpected JSON response')
+}
+</stringProp>
+          </JSR223Assertion>
+          <hashTree />
+        </hashTree>
+      </hashTree>
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="spike-02-add112" enabled="true">
+        <stringProp name="ThreadGroup.on_sample_error">startnextloop</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController">
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+          <stringProp name="LoopController.loops">-1</stringProp>
+        </elementProp>
+        <boolProp name="ThreadGroup.scheduler">true</boolProp>
+        <stringProp name="ThreadGroup.num_threads">${__P(num_threads_2,112)}</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">${__P(ramp_time_2,2)}</stringProp>
+        <stringProp name="ThreadGroup.delay">${__P(delay_2,30)}</stringProp>
+        <stringProp name="ThreadGroup.duration">${__P(duration_2,26)}</stringProp>
+      </ThreadGroup>
+      <hashTree>
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="01 Login" enabled="true">
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments">
+              <elementProp name="" elementType="HTTPArgument">
+                <boolProp name="HTTPArgument.always_encode">false</boolProp>
+                <stringProp name="Argument.value">{"email":"${email}","password":"${password}"}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+            </collectionProp>
+          </elementProp>
+          <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+          <stringProp name="HTTPSampler.domain">127.0.0.1</stringProp>
+          <stringProp name="HTTPSampler.port">${__P(port,3000)}</stringProp>
+          <stringProp name="HTTPSampler.protocol">http</stringProp>
+          <stringProp name="HTTPSampler.path">/api/login</stringProp>
+          <stringProp name="HTTPSampler.method">POST</stringProp>
+          <stringProp name="HTTPSampler.implementation">HttpClient4</stringProp>
+          <stringProp name="HTTPSampler.connect_timeout">2000</stringProp>
+          <stringProp name="HTTPSampler.response_timeout">5000</stringProp>
+          <boolProp name="HTTPSampler.follow_redirects">false</boolProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="Request headers" enabled="true">
+            <collectionProp name="HeaderManager.headers">
+              <elementProp name="" elementType="Header">
+                <stringProp name="Header.name">Content-Type</stringProp>
+                <stringProp name="Header.value">application/json</stringProp>
+              </elementProp>
+            </collectionProp>
+          </HeaderManager>
+          <hashTree />
+          <JSR223PreProcessor guiclass="TestBeanGUI" testclass="JSR223PreProcessor" testname="Bind CSV row to VU" enabled="true">
+            <stringProp name="scriptLanguage">groovy</stringProp>
+            <stringProp name="parameters">16</stringProp>
+            <stringProp name="filename" />
+            <stringProp name="cacheKey">true</stringProp>
+            <stringProp name="script">if (vars.get('email') == null) {
+    def path = props.getProperty('fixture')
+    def file = path ? new File(path) : new File(
+        org.apache.jmeter.services.FileServer.getFileServer().getBaseDir(),
+        '../data/workflow.csv')
+    int slot = Integer.parseInt(Parameters) + ctx.getThreadNum()
+    def rows = file.readLines('UTF-8')
+    def names = rows[0].split(',', -1)
+    def values = rows[slot + 1].split(',', -1)
+    names.eachWithIndex { name, i -&gt; vars.put(name, values[i]) }
+}
+vars.remove('token')
+vars.remove('orderId')
+</stringProp>
+          </JSR223PreProcessor>
+          <hashTree />
+          <UniformRandomTimer guiclass="UniformRandomTimerGui" testclass="UniformRandomTimer" testname="Pace workflow" enabled="true">
+            <stringProp name="ConstantTimer.delay">${__P(think_min,850)}</stringProp>
+            <stringProp name="RandomTimer.range">${__P(think_range,300)}</stringProp>
+          </UniformRandomTimer>
+          <hashTree />
+          <JSR223Assertion guiclass="TestBeanGUI" testclass="JSR223Assertion" testname="Validate login" enabled="true">
+            <stringProp name="scriptLanguage">groovy</stringProp>
+            <stringProp name="parameters">login</stringProp>
+            <stringProp name="filename" />
+            <stringProp name="cacheKey">true</stringProp>
+            <stringProp name="script">if (!prev.isSuccessful()) return
+def fail = { reason -&gt;
+    AssertionResult.setFailure(true)
+    AssertionResult.setFailureMessage(reason)
+}
+try {
+    if (prev.getResponseCode() != '200') {
+        fail('Expected HTTP 200')
+        return
+    }
+    def body = new groovy.json.JsonSlurper().parseText(prev.getResponseDataAsString())
+    int productId = vars.get('product_id').toInteger()
+    switch (Parameters) {
+        case 'login':
+            if (!(body.token instanceof String) || !body.token || body.user?.email != vars.get('email')) {
+                fail('Expected token and matching account')
+                return
+            }
+            vars.put('token', body.token)
+            break
+        case 'list':
+            if (!(body instanceof List) || !body.any { it.id == productId }) fail('Fixture product absent')
+            break
+        case 'detail':
+            if (body.id != productId || body.price?.toString() != vars.get('total_amount')) fail('Wrong product or price')
+            break
+        case 'cart':
+            if (body.message != 'Added to cart') fail('Cart confirmation absent')
+            break
+        case 'checkout':
+            if (!(body.orderId instanceof Number) || body.orderId &lt;= 0) {
+                fail('Valid orderId missing')
+                return
+            }
+            vars.put('orderId', body.orderId.toString())
+            break
+        case 'history':
+            def order = (body instanceof List &amp;&amp; body) ? body[0] : null
+            if (order?.id?.toString() != vars.get('orderId')
+                || order.status != 'pending'
+                || order.total_amount?.toString() != vars.get('total_amount')) {
+                fail('New pending order absent or mismatched in history')
+            }
+            break
+    }
+} catch (Exception ignored) {
+    fail('Unexpected JSON response')
+}
+</stringProp>
+          </JSR223Assertion>
+          <hashTree />
+        </hashTree>
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="02 Product list" enabled="true">
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments" />
+          </elementProp>
+          <stringProp name="HTTPSampler.domain">127.0.0.1</stringProp>
+          <stringProp name="HTTPSampler.port">${__P(port,3000)}</stringProp>
+          <stringProp name="HTTPSampler.protocol">http</stringProp>
+          <stringProp name="HTTPSampler.path">/api/products</stringProp>
+          <stringProp name="HTTPSampler.method">GET</stringProp>
+          <stringProp name="HTTPSampler.implementation">HttpClient4</stringProp>
+          <stringProp name="HTTPSampler.connect_timeout">2000</stringProp>
+          <stringProp name="HTTPSampler.response_timeout">5000</stringProp>
+          <boolProp name="HTTPSampler.follow_redirects">false</boolProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <JSR223Assertion guiclass="TestBeanGUI" testclass="JSR223Assertion" testname="Validate list" enabled="true">
+            <stringProp name="scriptLanguage">groovy</stringProp>
+            <stringProp name="parameters">list</stringProp>
+            <stringProp name="filename" />
+            <stringProp name="cacheKey">true</stringProp>
+            <stringProp name="script">if (!prev.isSuccessful()) return
+def fail = { reason -&gt;
+    AssertionResult.setFailure(true)
+    AssertionResult.setFailureMessage(reason)
+}
+try {
+    if (prev.getResponseCode() != '200') {
+        fail('Expected HTTP 200')
+        return
+    }
+    def body = new groovy.json.JsonSlurper().parseText(prev.getResponseDataAsString())
+    int productId = vars.get('product_id').toInteger()
+    switch (Parameters) {
+        case 'login':
+            if (!(body.token instanceof String) || !body.token || body.user?.email != vars.get('email')) {
+                fail('Expected token and matching account')
+                return
+            }
+            vars.put('token', body.token)
+            break
+        case 'list':
+            if (!(body instanceof List) || !body.any { it.id == productId }) fail('Fixture product absent')
+            break
+        case 'detail':
+            if (body.id != productId || body.price?.toString() != vars.get('total_amount')) fail('Wrong product or price')
+            break
+        case 'cart':
+            if (body.message != 'Added to cart') fail('Cart confirmation absent')
+            break
+        case 'checkout':
+            if (!(body.orderId instanceof Number) || body.orderId &lt;= 0) {
+                fail('Valid orderId missing')
+                return
+            }
+            vars.put('orderId', body.orderId.toString())
+            break
+        case 'history':
+            def order = (body instanceof List &amp;&amp; body) ? body[0] : null
+            if (order?.id?.toString() != vars.get('orderId')
+                || order.status != 'pending'
+                || order.total_amount?.toString() != vars.get('total_amount')) {
+                fail('New pending order absent or mismatched in history')
+            }
+            break
+    }
+} catch (Exception ignored) {
+    fail('Unexpected JSON response')
+}
+</stringProp>
+          </JSR223Assertion>
+          <hashTree />
+        </hashTree>
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="03 Product detail" enabled="true">
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments" />
+          </elementProp>
+          <stringProp name="HTTPSampler.domain">127.0.0.1</stringProp>
+          <stringProp name="HTTPSampler.port">${__P(port,3000)}</stringProp>
+          <stringProp name="HTTPSampler.protocol">http</stringProp>
+          <stringProp name="HTTPSampler.path">/api/products/${product_id}</stringProp>
+          <stringProp name="HTTPSampler.method">GET</stringProp>
+          <stringProp name="HTTPSampler.implementation">HttpClient4</stringProp>
+          <stringProp name="HTTPSampler.connect_timeout">2000</stringProp>
+          <stringProp name="HTTPSampler.response_timeout">5000</stringProp>
+          <boolProp name="HTTPSampler.follow_redirects">false</boolProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <JSR223Assertion guiclass="TestBeanGUI" testclass="JSR223Assertion" testname="Validate detail" enabled="true">
+            <stringProp name="scriptLanguage">groovy</stringProp>
+            <stringProp name="parameters">detail</stringProp>
+            <stringProp name="filename" />
+            <stringProp name="cacheKey">true</stringProp>
+            <stringProp name="script">if (!prev.isSuccessful()) return
+def fail = { reason -&gt;
+    AssertionResult.setFailure(true)
+    AssertionResult.setFailureMessage(reason)
+}
+try {
+    if (prev.getResponseCode() != '200') {
+        fail('Expected HTTP 200')
+        return
+    }
+    def body = new groovy.json.JsonSlurper().parseText(prev.getResponseDataAsString())
+    int productId = vars.get('product_id').toInteger()
+    switch (Parameters) {
+        case 'login':
+            if (!(body.token instanceof String) || !body.token || body.user?.email != vars.get('email')) {
+                fail('Expected token and matching account')
+                return
+            }
+            vars.put('token', body.token)
+            break
+        case 'list':
+            if (!(body instanceof List) || !body.any { it.id == productId }) fail('Fixture product absent')
+            break
+        case 'detail':
+            if (body.id != productId || body.price?.toString() != vars.get('total_amount')) fail('Wrong product or price')
+            break
+        case 'cart':
+            if (body.message != 'Added to cart') fail('Cart confirmation absent')
+            break
+        case 'checkout':
+            if (!(body.orderId instanceof Number) || body.orderId &lt;= 0) {
+                fail('Valid orderId missing')
+                return
+            }
+            vars.put('orderId', body.orderId.toString())
+            break
+        case 'history':
+            def order = (body instanceof List &amp;&amp; body) ? body[0] : null
+            if (order?.id?.toString() != vars.get('orderId')
+                || order.status != 'pending'
+                || order.total_amount?.toString() != vars.get('total_amount')) {
+                fail('New pending order absent or mismatched in history')
+            }
+            break
+    }
+} catch (Exception ignored) {
+    fail('Unexpected JSON response')
+}
+</stringProp>
+          </JSR223Assertion>
+          <hashTree />
+        </hashTree>
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="04 Add to cart" enabled="true">
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments">
+              <elementProp name="" elementType="HTTPArgument">
+                <boolProp name="HTTPArgument.always_encode">false</boolProp>
+                <stringProp name="Argument.value">{"id":${product_id},"quantity":1,"price":${total_amount}}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+            </collectionProp>
+          </elementProp>
+          <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+          <stringProp name="HTTPSampler.domain">127.0.0.1</stringProp>
+          <stringProp name="HTTPSampler.port">${__P(port,3000)}</stringProp>
+          <stringProp name="HTTPSampler.protocol">http</stringProp>
+          <stringProp name="HTTPSampler.path">/api/cart</stringProp>
+          <stringProp name="HTTPSampler.method">POST</stringProp>
+          <stringProp name="HTTPSampler.implementation">HttpClient4</stringProp>
+          <stringProp name="HTTPSampler.connect_timeout">2000</stringProp>
+          <stringProp name="HTTPSampler.response_timeout">5000</stringProp>
+          <boolProp name="HTTPSampler.follow_redirects">false</boolProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="Request headers" enabled="true">
+            <collectionProp name="HeaderManager.headers">
+              <elementProp name="" elementType="Header">
+                <stringProp name="Header.name">Content-Type</stringProp>
+                <stringProp name="Header.value">application/json</stringProp>
+              </elementProp>
+              <elementProp name="" elementType="Header">
+                <stringProp name="Header.name">Authorization</stringProp>
+                <stringProp name="Header.value">Bearer ${token}</stringProp>
+              </elementProp>
+            </collectionProp>
+          </HeaderManager>
+          <hashTree />
+          <JSR223Assertion guiclass="TestBeanGUI" testclass="JSR223Assertion" testname="Validate cart" enabled="true">
+            <stringProp name="scriptLanguage">groovy</stringProp>
+            <stringProp name="parameters">cart</stringProp>
+            <stringProp name="filename" />
+            <stringProp name="cacheKey">true</stringProp>
+            <stringProp name="script">if (!prev.isSuccessful()) return
+def fail = { reason -&gt;
+    AssertionResult.setFailure(true)
+    AssertionResult.setFailureMessage(reason)
+}
+try {
+    if (prev.getResponseCode() != '200') {
+        fail('Expected HTTP 200')
+        return
+    }
+    def body = new groovy.json.JsonSlurper().parseText(prev.getResponseDataAsString())
+    int productId = vars.get('product_id').toInteger()
+    switch (Parameters) {
+        case 'login':
+            if (!(body.token instanceof String) || !body.token || body.user?.email != vars.get('email')) {
+                fail('Expected token and matching account')
+                return
+            }
+            vars.put('token', body.token)
+            break
+        case 'list':
+            if (!(body instanceof List) || !body.any { it.id == productId }) fail('Fixture product absent')
+            break
+        case 'detail':
+            if (body.id != productId || body.price?.toString() != vars.get('total_amount')) fail('Wrong product or price')
+            break
+        case 'cart':
+            if (body.message != 'Added to cart') fail('Cart confirmation absent')
+            break
+        case 'checkout':
+            if (!(body.orderId instanceof Number) || body.orderId &lt;= 0) {
+                fail('Valid orderId missing')
+                return
+            }
+            vars.put('orderId', body.orderId.toString())
+            break
+        case 'history':
+            def order = (body instanceof List &amp;&amp; body) ? body[0] : null
+            if (order?.id?.toString() != vars.get('orderId')
+                || order.status != 'pending'
+                || order.total_amount?.toString() != vars.get('total_amount')) {
+                fail('New pending order absent or mismatched in history')
+            }
+            break
+    }
+} catch (Exception ignored) {
+    fail('Unexpected JSON response')
+}
+</stringProp>
+          </JSR223Assertion>
+          <hashTree />
+        </hashTree>
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="05 Checkout" enabled="true">
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments">
+              <elementProp name="" elementType="HTTPArgument">
+                <boolProp name="HTTPArgument.always_encode">false</boolProp>
+                <stringProp name="Argument.value">{"total_amount":${total_amount},"shipping_address":"${shipping_address}"}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+            </collectionProp>
+          </elementProp>
+          <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+          <stringProp name="HTTPSampler.domain">127.0.0.1</stringProp>
+          <stringProp name="HTTPSampler.port">${__P(port,3000)}</stringProp>
+          <stringProp name="HTTPSampler.protocol">http</stringProp>
+          <stringProp name="HTTPSampler.path">/api/checkout</stringProp>
+          <stringProp name="HTTPSampler.method">POST</stringProp>
+          <stringProp name="HTTPSampler.implementation">HttpClient4</stringProp>
+          <stringProp name="HTTPSampler.connect_timeout">2000</stringProp>
+          <stringProp name="HTTPSampler.response_timeout">5000</stringProp>
+          <boolProp name="HTTPSampler.follow_redirects">false</boolProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="Request headers" enabled="true">
+            <collectionProp name="HeaderManager.headers">
+              <elementProp name="" elementType="Header">
+                <stringProp name="Header.name">Content-Type</stringProp>
+                <stringProp name="Header.value">application/json</stringProp>
+              </elementProp>
+              <elementProp name="" elementType="Header">
+                <stringProp name="Header.name">Authorization</stringProp>
+                <stringProp name="Header.value">Bearer ${token}</stringProp>
+              </elementProp>
+            </collectionProp>
+          </HeaderManager>
+          <hashTree />
+          <JSR223Assertion guiclass="TestBeanGUI" testclass="JSR223Assertion" testname="Validate checkout" enabled="true">
+            <stringProp name="scriptLanguage">groovy</stringProp>
+            <stringProp name="parameters">checkout</stringProp>
+            <stringProp name="filename" />
+            <stringProp name="cacheKey">true</stringProp>
+            <stringProp name="script">if (!prev.isSuccessful()) return
+def fail = { reason -&gt;
+    AssertionResult.setFailure(true)
+    AssertionResult.setFailureMessage(reason)
+}
+try {
+    if (prev.getResponseCode() != '200') {
+        fail('Expected HTTP 200')
+        return
+    }
+    def body = new groovy.json.JsonSlurper().parseText(prev.getResponseDataAsString())
+    int productId = vars.get('product_id').toInteger()
+    switch (Parameters) {
+        case 'login':
+            if (!(body.token instanceof String) || !body.token || body.user?.email != vars.get('email')) {
+                fail('Expected token and matching account')
+                return
+            }
+            vars.put('token', body.token)
+            break
+        case 'list':
+            if (!(body instanceof List) || !body.any { it.id == productId }) fail('Fixture product absent')
+            break
+        case 'detail':
+            if (body.id != productId || body.price?.toString() != vars.get('total_amount')) fail('Wrong product or price')
+            break
+        case 'cart':
+            if (body.message != 'Added to cart') fail('Cart confirmation absent')
+            break
+        case 'checkout':
+            if (!(body.orderId instanceof Number) || body.orderId &lt;= 0) {
+                fail('Valid orderId missing')
+                return
+            }
+            vars.put('orderId', body.orderId.toString())
+            break
+        case 'history':
+            def order = (body instanceof List &amp;&amp; body) ? body[0] : null
+            if (order?.id?.toString() != vars.get('orderId')
+                || order.status != 'pending'
+                || order.total_amount?.toString() != vars.get('total_amount')) {
+                fail('New pending order absent or mismatched in history')
+            }
+            break
+    }
+} catch (Exception ignored) {
+    fail('Unexpected JSON response')
+}
+</stringProp>
+          </JSR223Assertion>
+          <hashTree />
+        </hashTree>
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="06 Order history" enabled="true">
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments" />
+          </elementProp>
+          <stringProp name="HTTPSampler.domain">127.0.0.1</stringProp>
+          <stringProp name="HTTPSampler.port">${__P(port,3000)}</stringProp>
+          <stringProp name="HTTPSampler.protocol">http</stringProp>
+          <stringProp name="HTTPSampler.path">/api/orders/my-orders</stringProp>
+          <stringProp name="HTTPSampler.method">GET</stringProp>
+          <stringProp name="HTTPSampler.implementation">HttpClient4</stringProp>
+          <stringProp name="HTTPSampler.connect_timeout">2000</stringProp>
+          <stringProp name="HTTPSampler.response_timeout">5000</stringProp>
+          <boolProp name="HTTPSampler.follow_redirects">false</boolProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="Request headers" enabled="true">
+            <collectionProp name="HeaderManager.headers">
+              <elementProp name="" elementType="Header">
+                <stringProp name="Header.name">Authorization</stringProp>
+                <stringProp name="Header.value">Bearer ${token}</stringProp>
+              </elementProp>
+            </collectionProp>
+          </HeaderManager>
+          <hashTree />
+          <JSR223Assertion guiclass="TestBeanGUI" testclass="JSR223Assertion" testname="Validate history" enabled="true">
+            <stringProp name="scriptLanguage">groovy</stringProp>
+            <stringProp name="parameters">history</stringProp>
+            <stringProp name="filename" />
+            <stringProp name="cacheKey">true</stringProp>
+            <stringProp name="script">if (!prev.isSuccessful()) return
+def fail = { reason -&gt;
+    AssertionResult.setFailure(true)
+    AssertionResult.setFailureMessage(reason)
+}
+try {
+    if (prev.getResponseCode() != '200') {
+        fail('Expected HTTP 200')
+        return
+    }
+    def body = new groovy.json.JsonSlurper().parseText(prev.getResponseDataAsString())
+    int productId = vars.get('product_id').toInteger()
+    switch (Parameters) {
+        case 'login':
+            if (!(body.token instanceof String) || !body.token || body.user?.email != vars.get('email')) {
+                fail('Expected token and matching account')
+                return
+            }
+            vars.put('token', body.token)
+            break
+        case 'list':
+            if (!(body instanceof List) || !body.any { it.id == productId }) fail('Fixture product absent')
+            break
+        case 'detail':
+            if (body.id != productId || body.price?.toString() != vars.get('total_amount')) fail('Wrong product or price')
+            break
+        case 'cart':
+            if (body.message != 'Added to cart') fail('Cart confirmation absent')
+            break
+        case 'checkout':
+            if (!(body.orderId instanceof Number) || body.orderId &lt;= 0) {
+                fail('Valid orderId missing')
+                return
+            }
+            vars.put('orderId', body.orderId.toString())
+            break
+        case 'history':
+            def order = (body instanceof List &amp;&amp; body) ? body[0] : null
+            if (order?.id?.toString() != vars.get('orderId')
+                || order.status != 'pending'
+                || order.total_amount?.toString() != vars.get('total_amount')) {
+                fail('New pending order absent or mismatched in history')
+            }
+            break
+    }
+} catch (Exception ignored) {
+    fail('Unexpected JSON response')
+}
+</stringProp>
+          </JSR223Assertion>
+          <hashTree />
+        </hashTree>
+      </hashTree>
+      <ResultCollector guiclass="ViewResultsFullVisualizer" testclass="ResultCollector" testname="View Results Tree" enabled="false" />
+      <hashTree />
+    </hashTree>
+  </hashTree>
+</jmeterTestPlan>
