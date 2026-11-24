@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+/jmeter.log
+/results/smoke/
+/results/pilot/
+/results/diagnostics/
